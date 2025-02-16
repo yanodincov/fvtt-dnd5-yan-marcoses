@@ -63,9 +63,7 @@
 
   /* ========= Вспомогательные функции ========= */
 
-  // Функция применения эффекта изменения параметров (Stats Effect)
   async function applyStatEffect(targetDoc, category, property, statValue, durationSec, endTime, transfer = false) {
-    // Определяем, является ли цель предметом
     let isItem = (targetDoc.documentName === "Item");
     let actor, origin;
     if (!isItem && targetDoc.actor) {
@@ -80,7 +78,6 @@
     const baseProp = property.replace('.bonuses.check', '').replace('.bonuses.value', '');
     const effectName = `Добавление к ${categories[category][baseProp] || property}: ${statValue}`;
     const changes = [{ key: `system.${property}`, mode: CONST.ACTIVE_EFFECT_MODES.ADD, value: statValue }];
-    // Для предметов (isItem true) disabled = true, если transfer === false; для токенов всегда false
     let disabledVal = (!isItem && targetDoc.actor) ? false : (transfer ? false : true);
     let effectData = {
       name: effectName,
@@ -114,7 +111,6 @@
     }
   }
 
-  // Функция применения периодического DOT эффекта (Урон/Лечения)
   async function applyDotPeriodicEffect(targetDoc, changeType, damageType, rounds, formula, transfer = false) {
     const targetUuid = targetDoc.uuid;
     const changeTypeRus = changeType === "damage" ? "Урон" : "Лечение";
@@ -125,50 +121,35 @@
       ? `${changeTypeRus} (${damageTypeRus}) [${formula}]`
       : `${changeTypeRus} [${formula}]`;
     const adjustedRounds = rounds;
-    // Если цель – токен, disabled = false; если предмет и transfer === false, disabled = true.
     let isItem = (targetDoc.documentName === "Item");
     let disabledVal = !isItem ? false : (transfer ? false : true);
-    // onTurnStart-скрипт: получаем цель по флагу custom.targetUuid и учитываем, если это предмет, то не преобразовываем его в актёра
+    
+    // Новый onTurnStartScript: Если actor == null, выводим предупреждение и пропускаем выполнение.
     let onTurnStartScript = `
-let effectDoc = fromUuidSync("%%EFFECT_UUID%%");
-if (!effectDoc) {
-  console.error("Ошибка: эффект не найден");
+if (!actor) {
+  ui.notifications.warn("Эффект применяется не с актера, выполнение пропущено.");
   return;
 }
-let target = fromUuidSync(effectDoc.flags.custom.targetUuid);
-if (!target) {
-  console.error("Цель не найдена");
-  return;
-}
-// Если эффект создан на токене, преобразуем цель в актёра; если эффект создан на предмете, оставляем её как есть.
-if (!effectDoc.flags.custom.isItem) {
-  if (target.documentName === "Token" && target.actor) {
-    target = target.actor;
-  }
-}
-if (effectDoc.transfer) {
-  // Если transfer = true, оставляем target как есть
-}
-const startRound = effectDoc.flags.custom.startRound || 0;
-const totalRounds = effectDoc.flags.custom.totalRounds || 0;
+const startRound = effect.flags.custom.startRound || 0;
+const totalRounds = effect.flags.custom.totalRounds || 0;
 const currentRound = game.combat ? game.combat.round : 0;
 const elapsed = currentRound - startRound;
 const remainingRounds = Math.max(totalRounds - elapsed, 0);
-console.log("Применение " + effectDoc.name + " для " + target.name);
+console.log("Применение " + effect.name + " для " + actor.name);
 let roll = await new Roll("${formula}").roll();
 let rollResult = roll.total;
 let finalValue = rollResult;
 console.log("Бросок: " + rollResult);
-let tempHP = target.system.attributes.hp.temp || 0;
-let currentHP = target.system.attributes.hp.value;
+let tempHP = actor.system.attributes.hp.temp || 0;
+let currentHP = actor.system.attributes.hp.value;
 if ("${changeType}" === "damage") {
-  if (target.system.traits.di.value.has("${damageType}")) {
-    ui.notifications.info(target.name + " имеет иммунитет к " + "${damageTypeRus}" + ", урон отменён.");
+  if (actor.system.traits.di.value.has("${damageType}")) {
+    ui.notifications.info(actor.name + " имеет иммунитет к ${damageTypeRus}, урон отменён.");
     return;
   }
-  if (target.system.traits.dr.value.has("${damageType}")) {
+  if (actor.system.traits.dr.value.has("${damageType}")) {
     finalValue = Math.floor(finalValue / 2);
-  } else if (target.system.traits.dv.value.has("${damageType}")) {
+  } else if (actor.system.traits.dv.value.has("${damageType}")) {
     finalValue *= 2;
   }
   if (tempHP > 0) {
@@ -181,20 +162,20 @@ if ("${changeType}" === "damage") {
     }
   }
   let newHP = Math.max(currentHP - finalValue, 0);
-  await target.update({
+  await actor.update({
     "system.attributes.hp.value": newHP,
     "system.attributes.hp.temp": tempHP
   });
 } else if ("${changeType}" === "heal") {
-  let newHP = Math.min(currentHP + finalValue, target.system.attributes.hp.max);
-  await target.update({ "system.attributes.hp.value": newHP });
+  let newHP = Math.min(currentHP + finalValue, actor.system.attributes.hp.max);
+  await actor.update({ "system.attributes.hp.value": newHP });
 }
 let absorbedDamage = ("${changeType}" === "damage") ? (rollResult - finalValue) : 0;
 let message;
 if ("${changeType}" === "damage") {
-  message = effectDoc.name + " наносит " + target.name + " " + finalValue + " пз/" + absorbedDamage + " бонус пз и закончится через " + remainingRounds + " ход(ов)";
+  message = effect.name + " наносит " + actor.name + " " + finalValue + " пз/" + absorbedDamage + " бонус пз и закончится через " + remainingRounds + " ход(ов)";
 } else {
-  message = effectDoc.name + " излечивает " + target.name + " +" + finalValue + " пз и закончится через " + remainingRounds + " ход(ов)";
+  message = effect.name + " излечивает " + actor.name + " +" + finalValue + " пз и закончится через " + remainingRounds + " ход(ов)";
 }
 ChatMessage.create({ content: message, whisper: ChatMessage.getWhisperRecipients("GM") });
 ui.notifications.info(message);
@@ -229,7 +210,6 @@ console.log("Сообщение отправлено в чат");
     ui.notifications.info(`${effectName} применено к ${targetName} на ${adjustedRounds} раунд(ов).`);
   }
 
-  // Функция мгновенного применения DOT эффекта (без создания активного эффекта)
   async function applyDotInstantEffect(targetDoc, changeType, damageType, rounds, formula, transfer = false) {
     let target;
     let isItem = (targetDoc.documentName === "Item");
@@ -273,7 +253,6 @@ console.log("Сообщение отправлено в чат");
     ui.notifications.info(message);
   }
 
-  // Функция корректировки ХП с учётом временных хит-поинтов, иммунитетов, резистов и уязвимостей
   async function adjustHP(actor, changeType, damageType, value, changeTypeRus = "", damageTypeRus = "") {
     if (!actor) return;
     const originalValue = value;
@@ -342,7 +321,7 @@ console.log("Сообщение отправлено в чат");
         <div id="itemUUIDGroup" class="form-col" style="display: none;">
           <div class="form-group">
             <label for="itemUUID">UUID предмета:</label>
-            <input type="text" id="itemUUID"/>
+            <input type="text" id="itemUUID" style="background-color: transparent;">
           </div>
           <div class="form-group">
             <label for="targetChoice">Цель:</label>
@@ -353,14 +332,14 @@ console.log("Сообщение отправлено в чат");
           </div>
           <div class="form-group">
             <label>Название предмета:</label>
-            <div id="itemNameFeedback" style="width:300px; border:1px solid #ccc; padding:2px;"></div>
+            <input type="text" id="itemNameFeedback" readonly style="width:300px; border:1px solid #ccc; padding:2px; background-color: transparent;" />
           </div>
         </div>
         <!-- Блок для выбранных токенов -->
         <div id="targetNamesGroup" class="form-col" style="display: none;">
           <div class="form-group">
             <label>Название токенов:</label>
-            <div id="targetNames" style="width:300px; border:1px solid #ccc; padding:2px;"></div>
+            <div id="targetNamesContainer" style="width:300px; border:1px solid #ccc; padding:2px;"></div>
           </div>
         </div>
         <!-- Выбор типа эффекта -->
@@ -402,7 +381,6 @@ console.log("Сообщение отправлено в чат");
             <input type="text" id="dotFormula" placeholder="1d8+3"/>
           </div>
         </div>
-        <!-- Длительность эффекта (для DOT указывается в раундах напрямую) -->
         <div class="form-group">
           <label for="duration">Длительность:</label>
           <input type="number" id="duration" value="10"/>
@@ -470,9 +448,7 @@ console.log("Сообщение отправлено в чат");
               return;
             }
             let targetChoice = html.find("#targetChoice").val();
-            // Если выбрана цель "Владелец", transfer = true (эффект активен); если "Цель действий" → transfer = false (эффект неактивен)
             let transfer = (targetChoice === "owner");
-            // Для предмета эффект добавляется именно на сам предмет, даже если у него есть actor
             let target = item;
             if (effectType === "stats") {
               let category = html.find("#category").val();
@@ -550,8 +526,11 @@ console.log("Сообщение отправлено в чат");
         const val = this.value;
         if (val === "tokens") {
           html.find("#itemUUIDGroup").hide();
-          let names = Array.from(game.user.targets).map(t => t.name).join(", ");
-          html.find("#targetNames").text(names);
+          const container = html.find("#targetNamesContainer");
+          container.empty();
+          Array.from(game.user.targets).forEach(t => {
+            container.append(`<input type="text" readonly style="width:100%; margin-bottom:2px; border:1px solid #ccc; padding:2px; background-color: transparent;" value="${t.name}" />`);
+          });
           html.find("#targetNamesGroup").show();
         } else {
           html.find("#targetNamesGroup").hide();
@@ -564,14 +543,14 @@ console.log("Сообщение отправлено в чат");
         const uuid = $(this).val().trim();
         const feedback = html.find("#itemNameFeedback");
         if (!uuid) {
-          feedback.text("");
+          feedback.val("");
           return;
         }
         const item = fromUuidSync(uuid);
         if (item) {
-          feedback.text(item.name).css("color", "green");
+          feedback.val(item.name).css("color", "");
         } else {
-          feedback.text("Предмет не найден").css("color", "red");
+          feedback.val("Предмет не найден").css("color", "red");
         }
       });
     }
