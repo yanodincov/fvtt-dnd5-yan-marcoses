@@ -1,22 +1,52 @@
 (async () => {
-  // Таблица соответствия характеристик (ключи в нижнем регистре)
+  // Объявляем константы и справочники
+
+  // Типы урона с русскими подписями
+  const damageTypes = {
+    "Дробящий": "bludgeoning",
+    "Колющий": "piercing",
+    "Рубящий": "slashing",
+    "Огонь": "fire",
+    "Холод": "cold",
+    "Кислота": "acid",
+    "Яд": "poison",
+    "Некротический": "necrotic",
+    "Свет": "radiant",
+    "Молния": "lightning",
+    "Гром": "thunder",
+    "Силовой": "force",
+    "Психический": "psychic"
+  };
+
+  // Имена характеристик для категорий "Характеристики" и "Спасброски"
+  const abilityNames = {
+    str: "Сила",
+    dex: "Ловкость",
+    con: "Выносливость",
+    int: "Интеллект",
+    wis: "Мудрость",
+    cha: "Харизма"
+  };
+
+  // Объект категорий для эффекта изменения параметров
   const categories = {
     "Общие": {
       "attributes.ac.value": "Класс брони",
+      "bonuses.msak.attack": "Бонус к атаке (заклинания)",
+      "bonuses.msak.damage": "Бонус к урону (заклинания)",
       "bonuses.mwak.attack": "Бонус к атаке (рукопашная)",
       "bonuses.mwak.damage": "Бонус к урону (рукопашная)",
       "bonuses.rwak.attack": "Бонус к атаке (дальняя)",
       "bonuses.rwak.damage": "Бонус к урону (дальняя)",
-      "attributes.hp.max": "Максимальное хп"
+      "attributes.hp.value": "Здоровье",
+      "attributes.hp.max": "Максимальное здоровье",
+      "attributes.hp.temp": "Временное здоровье",
+      "attributes.init.bonus": "Инициатива",
+      "attributes.movement.walk": "Скорость"
     },
-    "Характеристики": {
-      "abilities.str.value": "Сила",
-      "abilities.dex.value": "Ловкость",
-      "abilities.con.value": "Выносливость",
-      "abilities.int.value": "Интеллект",
-      "abilities.wis.value": "Мудрость",
-      "abilities.cha.value": "Харизма"
-    },
+    "Характеристики": Object.fromEntries(
+      Object.entries(abilityNames).map(([key, name]) => [`system.abilities.${key}.value`, name])
+    ),
     "Навыки": {
       "skills.acr.value": "Акробатика",
       "skills.arc.value": "Магия",
@@ -35,34 +65,62 @@
       "skills.slt.value": "Ловкость рук",
       "skills.ste.value": "Скрытность",
       "skills.sur.value": "Выживание"
-    }
+    },
+    "Спасброски": Object.assign(
+      {},
+      Object.fromEntries(
+        Object.entries(abilityNames).map(([key, name]) => [`system.abilities.${key}.bonuses.save`, name])
+      ),
+      { "system.abilities.all.bonuses.save": "Все" }
+    ),
+    "Устойчивость": (function(){
+       let obj = { "system.traits.dr.all": "Все" };
+       for (let [ru, en] of Object.entries(damageTypes)) {
+         obj[`system.traits.dr.value.${en}`] = ru;
+       }
+       return obj;
+    })(),
+    "Неуязвимость": (function(){
+       let obj = { "system.traits.di.all": "Все" };
+       for (let [ru, en] of Object.entries(damageTypes)) {
+         obj[`system.traits.di.value.${en}`] = ru;
+       }
+       return obj;
+    })(),
+    "Уязвимость": (function(){
+       let obj = { "system.traits.dv.all": "Все" };
+       for (let [ru, en] of Object.entries(damageTypes)) {
+         obj[`system.traits.dv.value.${en}`] = ru;
+       }
+       return obj;
+    })()
   };
 
-  // Таблица типов урона (опции в нижнем регистре)
-  const damageTypes = {
-    "Дробящий": "bludgeoning",
-    "Колющий": "piercing",
-    "Рубящий": "slashing",
-    "Огонь": "fire",
-    "Холод": "cold",
-    "Кислота": "acid",
-    "Яд": "poison",
-    "Некротический": "necrotic",
-    "Свет": "radiant",
-    "Молния": "lightning",
-    "Гром": "thunder",
-    "Силовой": "force",
-    "Психический": "psychic"
+  // Иконки для типов урона и эффектов
+  const damageIcons = {
+    "fire": "icons/svg/fire.svg",
+    "cold": "icons/svg/frozen.svg",
+    "acid": "icons/svg/acid.svg",
+    "poison": "icons/svg/biohazard.svg",
+    "necrotic": "icons/svg/poison.svg",
+    "radiant": "icons/svg/sun.svg",
+    "lightning": "icons/svg/lightning.svg",
+    "thunder": "icons/svg/sound.svg",
+    "force": "icons/svg/daze.svg",
+    "psychic": "icons/svg/explosion.svg",
+    "bludgeoning": "icons/svg/sword.svg",
+    "piercing": "icons/svg/sword.svg",
+    "slashing": "icons/svg/sword.svg"
   };
 
-  // Если активен модуль SimpleCalendar, получаем длительность раунда, иначе 6 секунд по умолчанию
-  let roundSeconds = 6;
-  if (game.modules.get("foundryvtt-simple-calendar")?.active) {
-    roundSeconds = SimpleCalendar.api.getCurrentSeason().roundTime || 6;
-  }
+  const healIcon = "icons/svg/heal.svg";
+  const buffIcon = "icons/svg/upgrade.svg";
+  const debuffIcon = "icons/svg/downgrade.svg";
 
-  /* ========= Вспомогательные функции ========= */
+  // Для эффектов вне боя длительность раунда равна 6 секундам
+  const roundSeconds = 6;
 
+  /* ========= Функция для эффекта изменения параметров ========= */
   async function applyStatEffect(targetDoc, category, property, statValue, durationSec, endTime, transfer = false) {
     let isItem = (targetDoc.documentName === "Item");
     let actor, origin;
@@ -72,26 +130,42 @@
     } else {
       origin = targetDoc.uuid;
     }
+    let originalKey = property;
     if (["Характеристики", "Навыки"].includes(category)) {
       property = property.replace(".value", ".bonuses.value");
     }
-    const baseProp = property.replace('.bonuses.check', '').replace('.bonuses.value', '');
-    const effectName = `Добавление к ${categories[category][baseProp] || property}: ${statValue}`;
-    const changes = [{ key: `system.${property}`, mode: CONST.ACTIVE_EFFECT_MODES.ADD, value: statValue }];
+    let effectName;
+    if (["Устойчивость", "Неуязвимость", "Уязвимость"].includes(category)) {
+      if (property.includes(".value.")) {
+        const damageTypeCode = property.substring(property.lastIndexOf(".") + 1);
+        property = property.substring(0, property.lastIndexOf("."));
+        statValue = damageTypeCode;
+      } else {
+        statValue = 1;
+      }
+      effectName = `${category} [${categories[category][originalKey]}]`;
+    } else {
+      effectName = `Добавление к ${categories[category][originalKey] || originalKey}: ${statValue}`;
+    }
+    const propKey = property.startsWith("system.") ? property : `system.${property}`;
+    let mode = CONST.ACTIVE_EFFECT_MODES.ADD;
+    if (["Устойчивость", "Неуязвимость", "Уязвимость"].includes(category)) {
+      mode = CONST.ACTIVE_EFFECT_MODES.CUSTOM;
+    }
+    const changes = [{ key: propKey, mode: mode, value: statValue }];
     let disabledVal = (!isItem && targetDoc.actor) ? false : (transfer ? false : true);
+    let eIcon = buffIcon;
+    if (String(statValue).trim().startsWith('-')) eIcon = debuffIcon;
+    if (isItem && targetDoc.img) { eIcon = targetDoc.img; }
     let effectData = {
       name: effectName,
-      icon: 'icons/svg/aura.svg',
+      icon: eIcon,
       changes: changes,
       origin: origin,
       disabled: disabledVal
     };
     if (durationSec > 0) {
-      effectData.duration = {
-        seconds: durationSec,
-        startTime: game.time.worldTime,
-        expiryTime: endTime
-      };
+      effectData.duration = { seconds: durationSec, startTime: game.time.worldTime, expiryTime: endTime };
     }
     effectData.transfer = transfer;
     effectData.flags = effectData.flags || {};
@@ -111,92 +185,102 @@
     }
   }
 
+  /* ========= Функция для периодического эффекта DOT (урон/лечения) ========= */
   async function applyDotPeriodicEffect(targetDoc, changeType, damageType, rounds, formula, transfer = false) {
     const targetUuid = targetDoc.uuid;
     const changeTypeRus = changeType === "damage" ? "Урон" : "Лечение";
     const damageTypeRus = changeType === "damage"
       ? (Object.entries(damageTypes).find(([ru, en]) => en === damageType)?.[0] || damageType)
       : "";
+    let effectIcon = changeType === "heal" ? healIcon : (damageIcons[damageType] || debuffIcon);
+    const isItem = (targetDoc.documentName === "Item");
+    if (isItem && targetDoc.img) { effectIcon = targetDoc.img; }
     const effectName = changeType === "damage"
-      ? `${changeTypeRus} (${damageTypeRus}) [${formula}]`
+      ? `${changeTypeRus} ${damageTypeRus} [${formula}]`
       : `${changeTypeRus} [${formula}]`;
-    const adjustedRounds = rounds;
-    let isItem = (targetDoc.documentName === "Item");
-    let disabledVal = !isItem ? false : (transfer ? false : true);
-    
-    // Новый onTurnStartScript: Если actor == null, выводим предупреждение и пропускаем выполнение.
-    let onTurnStartScript = `
+    let disabledVal = isItem ? (transfer ? false : true) : false;
+
+    // Шаблон для применения эффекта (вызывается и в бою, и вне боя через таймер)
+    const onTurnStartScript = `
 if (!actor) {
   ui.notifications.warn("Эффект применяется не с актера, выполнение пропущено.");
   return;
 }
-const startRound = effect.flags.custom.startRound || 0;
-const totalRounds = effect.flags.custom.totalRounds || 0;
-const currentRound = game.combat ? game.combat.round : 0;
-const elapsed = currentRound - startRound;
-const remainingRounds = Math.max(totalRounds - elapsed, 0);
-console.log("Применение " + effect.name + " для " + actor.name);
 let roll = await new Roll("${formula}").roll();
 let rollResult = roll.total;
-let finalValue = rollResult;
-console.log("Бросок: " + rollResult);
-let tempHP = actor.system.attributes.hp.temp || 0;
-let currentHP = actor.system.attributes.hp.value;
 if ("${changeType}" === "damage") {
-  if (actor.system.traits.di.value.has("${damageType}")) {
-    ui.notifications.info(actor.name + " имеет иммунитет к ${damageTypeRus}, урон отменён.");
-    return;
-  }
-  if (actor.system.traits.dr.value.has("${damageType}")) {
-    finalValue = Math.floor(finalValue / 2);
-  } else if (actor.system.traits.dv.value.has("${damageType}")) {
-    finalValue *= 2;
-  }
-  if (tempHP > 0) {
-    if (tempHP >= finalValue) {
-      tempHP -= finalValue;
-      finalValue = 0;
-    } else {
-      finalValue -= tempHP;
-      tempHP = 0;
-    }
-  }
-  let newHP = Math.max(currentHP - finalValue, 0);
-  await actor.update({
-    "system.attributes.hp.value": newHP,
-    "system.attributes.hp.temp": tempHP
-  });
-} else if ("${changeType}" === "heal") {
-  let newHP = Math.min(currentHP + finalValue, actor.system.attributes.hp.max);
+  await actor.applyDamage(rollResult, { damageType: "${damageType}" });
+} else {
+  let newHP = Math.min(actor.system.attributes.hp.value + rollResult, actor.system.attributes.hp.max);
   await actor.update({ "system.attributes.hp.value": newHP });
 }
-let absorbedDamage = ("${changeType}" === "damage") ? (rollResult - finalValue) : 0;
-let message;
-if ("${changeType}" === "damage") {
-  message = effect.name + " наносит " + actor.name + " " + finalValue + " пз/" + absorbedDamage + " бонус пз и закончится через " + remainingRounds + " ход(ов)";
-} else {
-  message = effect.name + " излечивает " + actor.name + " +" + finalValue + " пз и закончится через " + remainingRounds + " ход(ов)";
-}
+// Используем effect.duration?.remaining для расчёта оставшегося времени
+let remainingSeconds = Number(effect.duration?.remaining) || 0;
+let remainingRounds = Math.max(Math.floor(remainingSeconds / ${roundSeconds}), 0);
+let message = \`<a href="#" data-uuid="\${effect.id}">\${effect.name}</a> \${"${changeType}" === "damage" ? "наносит" : "излечивает"} \${rollResult} \${"${changeType}" === "damage" ? "урона" : "здоровья"} и закончится через \${remainingRounds} ход(ов)\`;
 ChatMessage.create({ content: message, whisper: ChatMessage.getWhisperRecipients("GM") });
-ui.notifications.info(message);
-console.log("Сообщение отправлено в чат");
+ui.notifications.info(\`\${effect.name} применяет \${rollResult} \${"${changeType}" === "damage" ? "урона" : "здоровья"} к \${actor.name} и закончится через \${remainingRounds} ход(ов)\`);
     `;
+
+    // Шаблон для старта таймера вне боя: таймер запускается только, если ещё не запущен
+    const startTimerScript = `
+if (!game.combat && effect.active) {
+  if (!effect.flags.custom?.eventId) {
+    console.log("Старт таймера для эффекта", effect.id);
+    let eventId = abouttime.doEvery({ seconds: ${roundSeconds} }, async () => {
+      ${onTurnStartScript}
+    });
+    effect.flags.custom = effect.flags.custom || {};
+    effect.flags.custom.eventId = eventId;
+    await effect.update({ "flags.custom.eventId": eventId });
+  }
+}
+    `;
+
+    // Шаблон для остановки таймера
+    const stopTimerScript = `
+if (effect.flags.custom?.eventId) {
+  console.log("Остановка таймера для эффекта", effect.id);
+  abouttime.reset(effect.flags.custom.eventId);
+  effect.flags.custom.eventId = null;
+  await effect.update({ "flags.custom.eventId": null });
+}
+    `;
+
+    // Проставляем эффекту длительность в секундах и раундах
     const effectData = {
       name: effectName,
-      icon: "icons/svg/downgrade.svg",
-      duration: { rounds: adjustedRounds },
+      icon: effectIcon,
+      duration: { 
+        rounds: rounds, 
+        seconds: rounds * roundSeconds, 
+        startTime: game.time.worldTime, 
+        expiryTime: game.time.worldTime + rounds * roundSeconds 
+      },
       disabled: disabledVal,
       flags: {
-        "effectmacro": { onTurnStart: { script: onTurnStartScript } },
+        effectmacro: {
+          // При начале хода в бою: применяем эффект
+          onTurnStart: { script: onTurnStartScript },
+          // Вне боя: запускаем таймер, который вызывает эффект каждые roundSeconds секунд
+          onCreate: { script: startTimerScript },
+          onEnable: { script: startTimerScript },
+          onCombatEnd: { script: startTimerScript },
+          // При удалении/выключении эффекта или начале боя – останавливаем таймер
+          onDelete: { script: stopTimerScript },
+          onDisable: { script: stopTimerScript },
+          onCombatStart: { script: stopTimerScript }
+        },
         custom: {
           startRound: game.combat ? game.combat.round : 0,
-          totalRounds: adjustedRounds,
+          totalRounds: rounds,
           targetUuid: targetUuid,
           isItem: isItem
         }
       },
       transfer: transfer
     };
+
     let effects;
     if (!isItem && targetDoc.actor) {
       effects = await targetDoc.actor.createEmbeddedDocuments("ActiveEffect", [effectData]);
@@ -204,98 +288,10 @@ console.log("Сообщение отправлено в чат");
       effects = await targetDoc.createEmbeddedDocuments("ActiveEffect", [effectData]);
     }
     const effectDoc = effects[0];
-    const updatedScript = onTurnStartScript.replace(/%%EFFECT_UUID%%/g, effectDoc.uuid);
-    await effectDoc.update({ "flags.effectmacro.onTurnStart.script": updatedScript });
-    let targetName = (!isItem && targetDoc.actor) ? targetDoc.actor.name : targetDoc.name;
-    ui.notifications.info(`${effectName} применено к ${targetName} на ${adjustedRounds} раунд(ов).`);
+    ui.notifications.info(`${effectName} применён к ${(!isItem && targetDoc.actor) ? targetDoc.actor.name : targetDoc.name} на ${rounds} раунд(ов).`);
   }
 
-  async function applyDotInstantEffect(targetDoc, changeType, damageType, rounds, formula, transfer = false) {
-    let target;
-    let isItem = (targetDoc.documentName === "Item");
-    if (!isItem && targetDoc.actor) {
-      target = targetDoc.actor;
-    } else {
-      target = targetDoc;
-      if (transfer) {
-        if (targetDoc.actor) {
-          target = targetDoc.actor;
-        } else {
-          ui.notifications.error("Эффект отмечен как transfer, но у предмета нет владельца.");
-          return;
-        }
-      }
-    }
-    const changeTypeRus = changeType === "damage" ? "Урон" : "Лечение";
-    const damageTypeRus = changeType === "damage"
-      ? (Object.entries(damageTypes).find(([ru, en]) => en === damageType)?.[0] || damageType)
-      : "";
-    const effectName = changeType === "damage"
-      ? `${changeTypeRus} (${damageTypeRus}) [${formula}]`
-      : `${changeTypeRus} [${formula}]`;
-    let totalChange = 0;
-    for (let i = 0; i < rounds; i++) {
-      let roll = await new Roll(formula).roll();
-      totalChange += roll.total;
-    }
-    let result = await adjustHP(target, changeType, damageType, totalChange, changeTypeRus, damageTypeRus);
-    let message;
-    if (changeType === "damage") {
-      let parts = [];
-      if (result.finalValue !== 0) parts.push(`– ${result.finalValue} пз`);
-      if (result.absorbedDamage !== 0) parts.push(`– ${result.absorbedDamage} бонус пз`);
-      let damageText = parts.join(" / ");
-      message = `${effectName} наносит ${target.name} ${damageText} типом ${damageTypeRus}`;
-    } else {
-      message = `${effectName} излечивает ${target.name} +${result.finalValue} пз`;
-    }
-    ChatMessage.create({ content: message, whisper: ChatMessage.getWhisperRecipients("GM") });
-    ui.notifications.info(message);
-  }
-
-  async function adjustHP(actor, changeType, damageType, value, changeTypeRus = "", damageTypeRus = "") {
-    if (!actor) return;
-    const originalValue = value;
-    let finalValue = value;
-    let tempHP = actor.system.attributes.hp.temp || 0;
-    let currentHP = actor.system.attributes.hp.value;
-    let maxHP = actor.system.attributes.hp.max;
-    if (changeType === "damage") {
-      if (actor.system.traits.di.value.has(damageType)) {
-        ui.notifications.info(actor.name + " имеет иммунитет к " + (damageTypeRus || damageType) + ", урон отменён.");
-        return { finalValue: 0, absorbedDamage: 0 };
-      }
-      if (actor.system.traits.dr.value.has(damageType)) {
-        finalValue = Math.floor(value / 2);
-      } else if (actor.system.traits.dv.value.has(damageType)) {
-        finalValue = value * 2;
-      }
-      if (tempHP > 0) {
-        if (tempHP >= finalValue) {
-          tempHP -= finalValue;
-          finalValue = 0;
-        } else {
-          finalValue -= tempHP;
-          tempHP = 0;
-        }
-      }
-      let newHP = Math.max(currentHP - finalValue, 0);
-      await actor.update({
-        "system.attributes.hp.value": newHP,
-        "system.attributes.hp.temp": tempHP
-      });
-      let absorbedDamage = originalValue - finalValue;
-      ui.notifications.info("Применено " + (changeTypeRus || "Урон") + (damageTypeRus ? " (" + damageTypeRus + ")" : "") + " " + finalValue + " для " + actor.name + ". Бонус пз поглощено: " + absorbedDamage);
-      return { finalValue, absorbedDamage };
-    } else if (changeType === "heal") {
-      let newHP = Math.min(currentHP + finalValue, maxHP);
-      await actor.update({ "system.attributes.hp.value": newHP });
-      ui.notifications.info("Применено " + (changeTypeRus || "Лечение") + " " + finalValue + " для " + actor.name);
-      return { finalValue, absorbedDamage: 0 };
-    }
-  }
-
-  /* ========= Форма диалога ========= */
+  /* ========= Диалог выбора параметров эффекта ========= */
   new Dialog({
     title: "Применение эффекта",
     content: `
@@ -382,7 +378,7 @@ console.log("Сообщение отправлено в чат");
           </div>
         </div>
         <div class="form-group">
-          <label for="duration">Длительность:</label>
+          <label for="duration">Длительность (в раундах):</label>
           <input type="number" id="duration" value="10"/>
         </div>
         <div class="form-group">
@@ -391,7 +387,7 @@ console.log("Сообщение отправлено в чат");
             <option value="seconds">Секунды</option>
             <option value="minutes">Минуты</option>
             <option value="hours">Часы</option>
-            <option value="rounds">Раунды</option>
+            <option value="rounds" selected>Раунды</option>
           </select>
         </div>
       </form>
@@ -403,14 +399,10 @@ console.log("Сообщение отправлено в чат");
           const targetType = html.find("#targetType").val();
           const effectType = html.find("#effectType").val();
           let durationInput = parseInt(html.find("#duration").val());
-          let timeUnit = html.find("#timeUnit").val();
           let durationSec = 0;
           let endTime = 0;
           if (!isNaN(durationInput) && durationInput > 0) {
-            if (timeUnit === "minutes") durationSec = durationInput * 60;
-            else if (timeUnit === "hours") durationSec = durationInput * 3600;
-            else if (timeUnit === "rounds") durationSec = durationInput * roundSeconds;
-            else durationSec = durationInput;
+            durationSec = durationInput * roundSeconds;
             endTime = game.time.worldTime + durationSec;
           }
           if (targetType === "tokens") {
@@ -465,49 +457,28 @@ console.log("Сообщение отправлено в чат");
             }
           }
         }
-      },
-      applyInstant: {
-        label: "Применить сразу",
-        callback: async (html) => {
-          const targetType = html.find("#targetType").val();
-          let rounds = parseInt(html.find("#duration").val());
-          if (isNaN(rounds) || rounds < 1) rounds = 1;
-          let damageTypeVal = html.find("#damageType").val();
-          let dotFormula = html.find("#dotFormula").val();
-          let changeType = (damageTypeVal === "heal") ? "heal" : "damage";
-          if (targetType === "tokens") {
-            let targets = Array.from(game.user.targets);
-            if (targets.length === 0) {
-              ui.notifications.warn("Пожалуйста, выберите хотя бы один токен.");
-              return;
-            }
-            for (let target of targets) {
-              await applyDotInstantEffect(target, changeType, damageTypeVal, rounds, dotFormula);
-            }
-          } else if (targetType === "item") {
-            ui.notifications.warn("Для предметов доступна только периодическая версия DOT эффекта.");
-          }
-        }
       }
     },
     render: (html) => {
-      function updateApplyInstantVisibility() {
-        const effectType = html.find("#effectType").val();
-        const targetType = html.find("#targetType").val();
-        if (effectType === "dot" && targetType === "tokens") {
-          html.closest(".dialog").find("button[data-button='applyInstant']").show();
-        } else {
-          html.closest(".dialog").find("button[data-button='applyInstant']").hide();
-        }
-      }
-      
       html.find("#category").on("change", function() {
         const cat = this.value;
-        const propSelect = html.find("#property");
-        const optionsHtml = Object.entries(categories[cat])
+        let entries = Object.entries(categories[cat]);
+        if (["Спасброски", "Устойчивость", "Неуязвимость", "Уязвимость"].includes(cat)) {
+          entries.sort((a, b) => {
+            if(a[1] === "Все") return -1;
+            if(b[1] === "Все") return 1;
+            return 0;
+          });
+        }
+        const optionsHtml = entries
           .map(([key, label]) => `<option value="${key}">${label}</option>`)
           .join("");
-        propSelect.html(optionsHtml);
+        html.find("#property").html(optionsHtml);
+        if (["Устойчивость", "Неуязвимость", "Уязвимость"].includes(cat)) {
+          html.find("#statValue").val("").prop("disabled", true).attr("placeholder", "Значение не требуется");
+        } else {
+          html.find("#statValue").prop("disabled", false).attr("placeholder", "+1, -2, 1d4, 15");
+        }
       }).trigger("change");
 
       html.find("#effectType").on("change", function() {
@@ -519,7 +490,6 @@ console.log("Сообщение отправлено в чат");
         } else {
           html.find("#timeUnit").prop("disabled", false);
         }
-        updateApplyInstantVisibility();
       }).trigger("change");
 
       html.find("#targetType").on("change", function() {
@@ -536,7 +506,6 @@ console.log("Сообщение отправлено в чат");
           html.find("#targetNamesGroup").hide();
           html.find("#itemUUIDGroup").show();
         }
-        updateApplyInstantVisibility();
       }).trigger("change");
 
       html.find("#itemUUID").on("change", function() {
